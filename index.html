@@ -12,7 +12,8 @@
         "imports": {
             "react": "https://esm.sh/react@18.2.0",
             "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-            "recharts": "https://esm.sh/recharts@2.12.0?external=react,react-dom",
+            "prop-types": "https://esm.sh/prop-types@15.8.1",
+            "recharts": "https://esm.sh/recharts@2.12.0?external=react,react-dom,prop-types",
             "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react"
         }
     }
@@ -21,9 +22,17 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        /* 確保背景色填滿整個視窗 */
-        body, html { margin: 0; padding: 0; background-color: #0f172a; height: 100%; }
-        /* 自定義捲軸樣式 (配合深色主題) */
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            background-color: #0f172a; 
+            height: 100%; 
+            width: 100%;
+        }
+        #root {
+            height: 100%;
+        }
+        /* 自定義捲軸 */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -31,17 +40,17 @@
     </style>
 </head>
 <body>
-    <div id="root"></div>
+    <div id="root" class="flex items-center justify-center text-slate-500">
+        系統啟動中 (System Initializing)...
+    </div>
 
     <script type="text/babel" data-type="module">
         import React, { useState, useEffect } from 'react';
-        import { createRoot } from 'react-dom/client'; // 這裡我們需要額外引入 createRoot 來啟動 React
+        import { createRoot } from 'react-dom/client';
         import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
         import { Zap, Battery, BatteryCharging, TrendingUp, AlertTriangle, ShieldCheck, Settings, ExternalLink, Sun, Activity, DollarSign } from 'lucide-react';
 
-        // --- 以下完全是你原本的程式碼內容 ---
-
-        // 模擬台電即時備轉容量率數據
+        // --- 模擬數據生成 ---
         const MOCK_TAIPOWER_DATA = {
             reserveMargin: "15.42",
             operatingReserve: "452.1",
@@ -50,13 +59,12 @@
             timestamp: new Date().toLocaleTimeString()
         };
 
-        // 模擬工廠 24小時負載數據
         const generateLoadData = () => {
             const data = [];
             for (let i = 0; i < 24; i++) {
                 let baseLoad = 4000 + Math.random() * 500;
                 
-                // 中午太陽能時段
+                // 中午太陽能時段影響
                 if (i >= 10 && i <= 14) baseLoad -= 800;
                 
                 // 傍晚尖峰
@@ -64,8 +72,8 @@
 
                 // 批次生產優化後的負載
                 let optimizedLoad = baseLoad;
-                if (i >= 16 && i <= 21) optimizedLoad -= 2000;
-                if (i >= 0 && i <= 6) optimizedLoad += 1500;
+                if (i >= 16 && i <= 21) optimizedLoad -= 2000; // 移轉尖峰
+                if (i >= 0 && i <= 6) optimizedLoad += 1500;   // 移至離峰
 
                 data.push({
                     time: `${i}:00`,
@@ -78,6 +86,7 @@
             return data;
         };
 
+        // --- 元件定義 ---
         const Card = ({ title, children, className = "" }) => (
             <div className={`bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg ${className}`}>
                 <h3 className="text-slate-400 text-sm font-medium mb-2 flex items-center gap-2">
@@ -106,6 +115,7 @@
             </div>
         );
 
+        // --- 主應用程式 ---
         function PowerNexusDashboard() {
             const [data, setData] = useState(generateLoadData());
             const [taipowerStatus, setTaipowerStatus] = useState(MOCK_TAIPOWER_DATA);
@@ -371,7 +381,7 @@
                                             </div>
                                         </div>
 
-                                         {/* 策略 3: 需量反應 */}
+                                        {/* 策略 3: 需量反應 */}
                                          <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-start gap-3">
                                             <DollarSign className="text-yellow-400" size={20} />
                                             <div>
@@ -431,8 +441,15 @@
         }
 
         // --- 啟動程式 (Mounting) ---
-        const root = createRoot(document.getElementById('root'));
-        root.render(<PowerNexusDashboard />);
+        try {
+            const container = document.getElementById('root');
+            const root = createRoot(container);
+            root.render(<PowerNexusDashboard />);
+            console.log("PowerNexus Dashboard launched successfully.");
+        } catch (error) {
+            console.error("Dashboard failed to launch:", error);
+            document.getElementById('root').innerHTML = `<div style="color:red; padding:20px;">System Error: ${error.message}</div>`;
+        }
 
     </script>
 </body>
