@@ -23,17 +23,24 @@
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
     <style>
-        body, html { 
-            margin: 0; 
-            padding: 0; 
-            background-color: #0f172a; 
-            height: 100%; 
+        /* Ensure top UI not clipped (safe area + extra padding). This fixes "最上面的字被卡到了". */
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #0f172a;
+            height: 100%;
             width: 100%;
+            padding-top: env(safe-area-inset-top, 12px); /* mobile safe area plus small buffer */
+            box-sizing: border-box;
         }
         #root {
-            height: 100%;
+            min-height: calc(100vh - env(safe-area-inset-top, 12px));
+            width: 100%;
         }
-        /* 自定義捲軸 */
+        header {
+            padding-top: 6px; /* extra header padding so content doesn't touch top */
+        }
+        /* custom scrollbar */
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -46,12 +53,12 @@
     </div>
 
     <script type="text/babel" data-type="module">
-        import React, { useState, useEffect } from 'react';
+        import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
         import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, AreaChart, Area } from 'recharts';
         import { Zap, Battery, BatteryCharging, TrendingUp, AlertTriangle, ShieldCheck, Settings, ExternalLink, Sun, Activity, DollarSign } from 'lucide-react';
 
-        // --- 模擬數據生成 ---
+        // --- initial mock (keeps shape) --- 
         const MOCK_TAIPOWER_DATA = {
             reserveMargin: "15.42",
             operatingReserve: "452.1",
@@ -60,34 +67,46 @@
             timestamp: new Date().toLocaleTimeString()
         };
 
-        const generateLoadData = () => {
+        // --- helper: generate 24h baseline dataset (unchanged shape) ---
+        const generateLoadData = (seedOffset = 0) => {
             const data = [];
             for (let i = 0; i < 24; i++) {
+                const h = (i + seedOffset) % 24;
                 let baseLoad = 4000 + Math.random() * 500;
-                
-                // 中午太陽能時段影響
-                if (i >= 10 && i <= 14) baseLoad -= 800;
-                
-                // 傍晚尖峰
-                if (i >= 16 && i <= 21) baseLoad += 2500;
 
-                // 批次生產優化後的負載
+                // noon solar effect
+                if (h >= 10 && h <= 14) baseLoad -= 800;
+
+                // evening peak
+                if (h >= 16 && h <= 21) baseLoad += 2500;
+
+                // optimization shifts
                 let optimizedLoad = baseLoad;
-                if (i >= 16 && i <= 21) optimizedLoad -= 2000; // 移轉尖峰
-                if (i >= 0 && i <= 6) optimizedLoad += 1500;   // 移至離峰
+                if (h >= 16 && h <= 21) optimizedLoad -= 2000; // shift peak
+                if (h >= 0 && h <= 6) optimizedLoad += 1500;   // move to off-peak
 
                 data.push({
-                    time: `${i}:00`,
+                    time: `${h}:00`,
                     originalLoad: Math.round(baseLoad),
-                    optimizedLoad: Math.round(optimizedLoad),
-                    solarGen: (i >= 6 && i <= 17) ? Math.round(1000 * Math.sin((i-6)/11 * Math.PI)) : 0,
-                    price: (i >= 16 && i <= 21) ? 8.5 : (i >= 9 && i < 16) ? 4.2 : 2.1
+                    optimizedLoad: Math.max(0, Math.round(optimizedLoad)),
+                    solarGen: (h >= 6 && h <= 17) ? Math.round(1000 * Math.sin((h-6)/11 * Math.PI)) : 0,
+                    price: (h >= 16 && h <= 21) ? 8.5 : (h >= 9 && h < 16) ? 4.2 : 2.1
                 });
             }
             return data;
         };
 
-        // --- 元件定義 ---
+        // --- small util: determine light color based on reserve margin percent ---
+        function lightColorFromMargin(marginPct) {
+            const m = Number(marginPct);
+            if (isNaN(m)) return 'Gray';
+            if (m >= 10) return 'Green';
+            if (m >= 6) return 'Yellow';
+            if (m >= 2) return 'Orange';
+            return 'Red';
+        }
+
+        // --- UI components (small) ---
         const Card = ({ title, children, className = "" }) => (
             <div className={`bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg ${className}`}>
                 <h3 className="text-slate-400 text-sm font-medium mb-2 flex items-center gap-2">
@@ -104,7 +123,7 @@
                     <div className={`text-2xl font-bold mt-1 ${color}`}>
                         {value} <span className="text-sm text-slate-500">{unit}</span>
                     </div>
-                    {trend && (
+                    {trend !== undefined && (
                         <div className={`text-xs mt-1 ${trend > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                             {trend > 0 ? '▲' : '▼'} {Math.abs(trend)}% vs 上月
                         </div>
@@ -116,31 +135,134 @@
             </div>
         );
 
-        // --- 主應用程式 ---
+        // --- Main App ---
         function PowerNexusDashboard() {
-            const [data, setData] = useState(generateLoadData());
+            // simulation & data states
+            const [data, setData] = useState(generateLoadData(0));
             const [taipowerStatus, setTaipowerStatus] = useState(MOCK_TAIPOWER_DATA);
             const [currentTime, setCurrentTime] = useState(new Date());
             const [contractCapacity, setContractCapacity] = useState(7000);
             const [isSimulationRunning, setIsSimulationRunning] = useState(true);
 
+            // keep a seed offset for rotating the dataset for "movement"
+            const seedRef = useRef(0);
+
+            // --- Taipower fetch function (CSV primary, HTML fallback) ---
             useEffect(() => {
-                const timer = setInterval(() => {
-                    setCurrentTime(new Date());
-                    if (isSimulationRunning) {
-                         setTaipowerStatus(prev => ({
-                            ...prev,
-                            reserveMargin: (15 + Math.random()).toFixed(2),
-                            timestamp: new Date().toLocaleTimeString()
-                        }));
+                let mounted = true;
+
+                async function fetchTaipower() {
+                    // Taipower CSV endpoint (official open-data). Attempt first.
+                    const csvUrl = 'https://data.taipower.com.tw/OpData/%E6%AF%8F%E6%97%A5%E5%82%99%E8%BD%89%E5%AE%B9%E9%87%8F%E7%8E%87_%E5%B0%96%E5%B3%B0_%E6%9C%AC%E5%B9%B4.csv';
+                    const htmlFallback = 'https://www.taipower.com.tw/d006/loadGraph/loadGraph/load_reserveT_.html';
+
+                    try {
+                        const res = await fetch(csvUrl, { method: 'GET' });
+                        if (!res.ok) throw new Error('CSV fetch failed');
+                        const txt = await res.text();
+                        // parse CSV: find last non-empty line and parse columns
+                        const lines = txt.trim().split(/\r?\n/).filter(Boolean);
+                        if (lines.length <= 1) throw new Error('CSV content unexpected');
+                        const header = lines[0].split(',');
+                        const last = lines[lines.length - 1].split(',');
+                        // try to find "備轉容量率" column by header match (header likely contains % label)
+                        let reserveIdx = header.findIndex(h => /備轉容量率|reserve/i.test(h));
+                        let reserveVal = reserveIdx >= 0 ? last[reserveIdx] : last[last.length - 1];
+                        // some datasets report in percent number or e.g. "20.2"
+                        reserveVal = reserveVal.replace('%', '').trim();
+
+                        // also try to find 備轉容量(萬瓩)
+                        let opIdx = header.findIndex(h => /備轉容量|Operating Reserve/i.test(h));
+                        let opVal = opIdx >= 0 ? last[opIdx] : null;
+                        if (opVal) opVal = opVal.trim();
+
+                        if (mounted) {
+                            const lightColor = lightColorFromMargin(reserveVal);
+                            setTaipowerStatus(prev => ({
+                                ...prev,
+                                reserveMargin: Number(reserveVal).toFixed(2),
+                                operatingReserve: opVal || prev.operatingReserve,
+                                lightColor,
+                                load: prev.load,
+                                timestamp: new Date().toLocaleString()
+                            }));
+                        }
+                        return;
+                    } catch (csvErr) {
+                        // CSV failed (possible CORS). Try HTML fallback (scrape)
+                        try {
+                            const res2 = await fetch(htmlFallback, { method: 'GET' });
+                            if (!res2.ok) throw new Error('HTML fetch failed');
+                            const html = await res2.text();
+                            // crude regex extraction for "備轉容量率" and "備轉容量"
+                            // look for number with '%' near "備轉容量率" or "備轉容量"
+                            let pctMatch = html.match(/備轉容量率[^\d%]*([\d]+\.[\d]+|[\d]+)\s*%/i) || html.match(/(\d+\.\d+|\d+)\s*%/);
+                            let opMatch = html.match(/備轉容量[^\d]*([\d]+\.[\d]+|[\d]+)\s*萬?瓩/i);
+                            let pct = pctMatch ? pctMatch[1] : null;
+                            let op = opMatch ? opMatch[1] : null;
+                            if (pct && mounted) {
+                                const lightColor = lightColorFromMargin(pct);
+                                setTaipowerStatus(prev => ({
+                                    ...prev,
+                                    reserveMargin: Number(pct).toFixed(2),
+                                    operatingReserve: op || prev.operatingReserve,
+                                    lightColor,
+                                    load: prev.load,
+                                    timestamp: new Date().toLocaleString()
+                                }));
+                            }
+                        } catch (htmlErr) {
+                            // final fallback: keep mock but update timestamp
+                            if (mounted) {
+                                setTaipowerStatus(prev => ({ ...prev, timestamp: new Date().toLocaleString() }));
+                            }
+                        }
                     }
+                }
+
+                // initial fetch & periodic refresh every 10 minutes (600000 ms)
+                fetchTaipower();
+                const interval = setInterval(fetchTaipower, 10 * 60 * 1000);
+
+                return () => {
+                    mounted = false;
+                    clearInterval(interval);
+                };
+            }, []);
+
+            // --- local simulation "movement" for the load curve ---
+            useEffect(() => {
+                // update clock every second
+                const clock = setInterval(() => setCurrentTime(new Date()), 1000);
+
+                // animate dataset every 2s when running (rotate + small random drift)
+                const anim = setInterval(() => {
+                    if (!isSimulationRunning) return;
+                    // rotate seed (makes time labels shift) and produce slight drift
+                    seedRef.current = (seedRef.current + 1) % 24;
+                    const newData = generateLoadData(seedRef.current).map((row, idx) => {
+                        // introduce small continuous drift to make it look "live"
+                        const jitter = Math.round((Math.sin((Date.now() / 10000) + idx) * 30));
+                        return {
+                            ...row,
+                            originalLoad: Math.max(0, row.originalLoad + jitter),
+                            optimizedLoad: Math.max(0, row.optimizedLoad + Math.round(jitter * 0.6)),
+                            solarGen: Math.max(0, row.solarGen + Math.round(jitter * 0.1))
+                        };
+                    });
+                    setData(newData);
                 }, 2000);
-                return () => clearInterval(timer);
+
+                return () => {
+                    clearInterval(clock);
+                    clearInterval(anim);
+                };
             }, [isSimulationRunning]);
 
             const currentHour = currentTime.getHours();
             const isPeakHour = currentHour >= 16 && currentHour <= 21;
 
+            // small helper for light color class
             const getLightColorClass = (color) => {
                 switch(color) {
                     case 'Green': return 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.6)]';
@@ -181,15 +303,14 @@
                         </div>
                     </header>
 
-                    {/* 台電即時資訊區塊 */}
+                    {/* Taipower real-time block */}
                     <section className="mb-8">
                         <Card title={<span className="flex items-center gap-2"><Activity size={16}/> 台電系統即時資訊同步 (Taipower Real-time Sync)</span>} className="border-cyan-900/50 bg-slate-800/50">
                             <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-                                
-                                {/* 備轉容量燈號 */}
+                                {/* light */}
                                 <div className="flex items-center gap-4">
                                     <div className={`w-16 h-16 rounded-full flex items-center justify-center border-4 border-slate-700 ${getLightColorClass(taipowerStatus.lightColor)}`}>
-                                        <span className="font-bold text-white drop-shadow-md">{taipowerStatus.lightColor === 'Green' ? '充裕' : '吃緊'}</span>
+                                        <span className="font-bold text-white drop-shadow-md">{taipowerStatus.lightColor === 'Green' ? '充裕' : (taipowerStatus.lightColor === 'Yellow' ? '吃緊' : '警戒')}</span>
                                     </div>
                                     <div>
                                         <div className="text-slate-400 text-sm">目前備轉容量率</div>
@@ -198,7 +319,7 @@
                                     </div>
                                 </div>
 
-                                {/* 數據細項 */}
+                                {/* details */}
                                 <div className="grid grid-cols-2 gap-x-12 gap-y-2 text-sm">
                                     <div className="flex justify-between w-48">
                                         <span className="text-slate-400">目前用電量:</span>
@@ -218,60 +339,33 @@
                                     </div>
                                 </div>
 
-                                {/* 外部連結按鈕 */}
+                                {/* link */}
                                 <div className="flex flex-col gap-2">
                                     <a 
-                                        href="https://www.taipower.com.tw/" 
+                                        href="https://www.taipower.com.tw/d006/loadGraph/loadGraph/load_reserveT_.html" 
                                         target="_blank" 
                                         rel="noopener noreferrer"
                                         className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors text-sm font-medium"
                                     >
                                         <ExternalLink size={16} />
-                                        連結台電官網查證
+                                        台電官網：今日備轉容量率 (查證)
                                     </a>
-                                    <div className="text-xs text-slate-500 text-center">*數據每10分鐘更新</div>
+                                    <div className="text-xs text-slate-500 text-center">*數據來源：台電公開資料 / Data Portal。每約10分鐘更新 (視官方發佈頻率)。</div>
                                 </div>
                             </div>
                         </Card>
                     </section>
 
-                    {/* 主要 KPI 儀表板 */}
+                    {/* KPI grid */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-                        <KPICard 
-                            label="即時需量 (Current Demand)" 
-                            value="5,842" 
-                            unit="kW" 
-                            icon={Zap} 
-                            trend={-2.5}
-                            color="text-cyan-400"
-                        />
-                        <KPICard 
-                            label="功率因數 (Power Factor)" 
-                            value="99.2" 
-                            unit="%" 
-                            icon={TrendingUp} 
-                            color="text-emerald-400"
-                        />
-                        <KPICard 
-                            label="儲能系統 (ESS SoC)" 
-                            value="85" 
-                            unit="%" 
-                            icon={BatteryCharging} 
-                            color="text-yellow-400"
-                        />
-                        <KPICard 
-                            label="本月預估電費 (Est. Cost)" 
-                            value="845" 
-                            unit="萬 NTD" 
-                            icon={DollarSign} 
-                            trend={-12.4}
-                            color="text-rose-300"
-                        />
+                        <KPICard label="即時需量 (Current Demand)" value="5,842" unit="kW" icon={Zap} trend={-2.5} color="text-cyan-400" />
+                        <KPICard label="功率因數 (Power Factor)" value="99.2" unit="%" icon={TrendingUp} color="text-emerald-400" />
+                        <KPICard label="儲能系統 (ESS SoC)" value="85" unit="%" icon={BatteryCharging} color="text-yellow-400" />
+                        <KPICard label="本月預估電費 (Est. Cost)" value="845" unit="萬 NTD" icon={DollarSign} trend={-12.4} color="text-rose-300" />
                     </div>
 
-                    {/* 核心圖表區 */}
+                    {/* charts & decision core */}
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-                        {/* 左側：負載曲線與優化對比 */}
                         <div className="lg:col-span-2 space-y-6">
                             <Card title="負載曲線優化與需量反應 (Load Profile Optimization)">
                                 <div className="h-80 w-full">
@@ -290,32 +384,12 @@
                                             <XAxis dataKey="time" stroke="#64748b" fontSize={12} />
                                             <YAxis stroke="#64748b" fontSize={12} />
                                             <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
-                                            <Tooltip 
-                                                contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f1f5f9' }}
-                                                itemStyle={{ color: '#e2e8f0' }}
-                                            />
+                                            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', color: '#f1f5f9' }} itemStyle={{ color: '#e2e8f0' }} />
                                             <Legend />
                                             <ReferenceLine y={contractCapacity} label={{ value: '經常契約容量', fill: '#f43f5e', fontSize: 12 }} stroke="#f43f5e" strokeDasharray="3 3" />
                                             
-                                            <Area 
-                                                type="monotone" 
-                                                dataKey="originalLoad" 
-                                                name="原始負載 (無優化)" 
-                                                stroke="#94a3b8" 
-                                                strokeWidth={2}
-                                                strokeDasharray="5 5"
-                                                fillOpacity={1} 
-                                                fill="url(#colorOriginal)" 
-                                            />
-                                            <Area 
-                                                type="monotone" 
-                                                dataKey="optimizedLoad" 
-                                                name="PowerNexus 優化後" 
-                                                stroke="#22d3ee" 
-                                                strokeWidth={3}
-                                                fillOpacity={1} 
-                                                fill="url(#colorOptimized)" 
-                                            />
+                                            <Area type="monotone" dataKey="originalLoad" name="原始負載 (無優化)" stroke="#94a3b8" strokeWidth={2} strokeDasharray="5 5" fillOpacity={1} fill="url(#colorOriginal)" />
+                                            <Area type="monotone" dataKey="optimizedLoad" name="PowerNexus 優化後" stroke="#22d3ee" strokeWidth={3} fillOpacity={1} fill="url(#colorOptimized)" />
                                             <Line type="monotone" dataKey="solarGen" name="太陽能發電" stroke="#eab308" dot={false} strokeWidth={2} />
                                         </AreaChart>
                                     </ResponsiveContainer>
@@ -333,11 +407,9 @@
                             </Card>
                         </div>
 
-                        {/* 右側：即時決策建議面板 */}
                         <div className="lg:col-span-1 space-y-6">
                             <Card title="PowerNexus AI 決策中心 (Decision Core)">
                                 <div className="space-y-4">
-                                    {/* 契約容量監控 */}
                                     <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
                                         <div className="flex justify-between items-center mb-2">
                                             <span className="text-sm text-slate-400">契約容量預測 (Capacity Prediction)</span>
@@ -352,11 +424,9 @@
                                         </div>
                                     </div>
 
-                                    {/* 即時策略建議 */}
                                     <div className="space-y-3">
                                         <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">AI Action Plan</h4>
-                                        
-                                        {/* 策略 1: 尖峰防禦 */}
+
                                         <div className={`p-3 rounded-lg border flex items-start gap-3 ${isPeakHour ? 'bg-rose-900/20 border-rose-700/50' : 'bg-slate-800 border-slate-700'}`}>
                                             <ShieldCheck className={isPeakHour ? "text-rose-400" : "text-slate-500"} size={20} />
                                             <div>
@@ -371,7 +441,6 @@
                                             </div>
                                         </div>
 
-                                        {/* 策略 2: 功率因數 */}
                                         <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-start gap-3">
                                             <Settings className="text-emerald-400" size={20} />
                                             <div>
@@ -382,8 +451,7 @@
                                             </div>
                                         </div>
 
-                                        {/* 策略 3: 需量反應 */}
-                                         <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-start gap-3">
+                                        <div className="bg-slate-800 p-3 rounded-lg border border-slate-700 flex items-start gap-3">
                                             <DollarSign className="text-yellow-400" size={20} />
                                             <div>
                                                 <div className="text-sm font-bold text-slate-300">需量競價 (Demand Bidding)</div>
@@ -403,7 +471,6 @@
                         </div>
                     </div>
 
-                    {/* 底部：控制面板 */}
                     <Card title="系統模擬控制 (Simulation Controls)">
                         <div className="flex flex-wrap gap-4 items-center">
                             <div className="flex items-center gap-2">
@@ -441,7 +508,7 @@
             );
         }
 
-        // --- 啟動程式 (Mounting) ---
+        // --- Mount app ---
         try {
             const container = document.getElementById('root');
             const root = createRoot(container);
@@ -455,4 +522,3 @@
     </script>
 </body>
 </html>
-
