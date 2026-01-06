@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PowerNexus - 智慧能源戰略中樞</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+    <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        body { background-color: #0f172a; color: #f1f5f9; }
+        .recharts-cartesian-grid-horizontal line, .recharts-cartesian-grid-vertical line {
+            stroke: #334155;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const { 
+            AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, 
+            Tooltip, Legend, ResponsiveContainer, ReferenceLine 
+        } = Recharts;
+
+        // --- 子元件定義 ---
+        const Card = ({ title, children, className = "" }) => (
+            <div className={`bg-slate-800 border border-slate-700 rounded-lg p-4 shadow-lg ${className}`}>
+                <h3 className="text-slate-400 text-sm font-medium mb-4 flex items-center gap-2">
+                    {title}
+                </h3>
+                {children}
+            </div>
+        );
+
+        const KPICard = ({ label, value, unit, iconName, trend, color = "text-white" }) => {
+            useEffect(() => { lucide.createIcons(); }, []);
+            return (
+                <div className="bg-slate-800 p-4 rounded-lg border border-slate-700 flex items-center justify-between">
+                    <div>
+                        <p className="text-slate-400 text-sm">{label}</p>
+                        <div className={`text-2xl font-bold mt-1 ${color}`}>
+                            {value} <span className="text-sm text-slate-500">{unit}</span>
+                        </div>
+                        {trend && (
+                            <div className={`text-xs mt-1 ${trend > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {trend > 0 ? '▲' : '▼'} {Math.abs(trend)}% vs 上月
+                            </div>
+                        )}
+                    </div>
+                    <div className="p-3 bg-slate-700 rounded-full text-cyan-400">
+                        <i data-lucide={iconName}></i>
+                    </div>
+                </div>
+            );
+        };
+
+        // --- 主應用程式 ---
+        function PowerNexusDashboard() {
+            const [currentTime, setCurrentTime] = useState(new Date());
+            const [contractCapacity, setContractCapacity] = useState(7000);
+            const [isSimulationRunning, setIsSimulationRunning] = useState(true);
+            const [reserveMargin, setReserveMargin] = useState("15.42");
+
+            // 數據生成
+            const data = useMemo(() => {
+                const temp = [];
+                for (let i = 0; i < 24; i++) {
+                    let baseLoad = 4000 + Math.random() * 500;
+                    if (i >= 10 && i <= 14) baseLoad -= 800;
+                    if (i >= 16 && i <= 21) baseLoad += 2500;
+
+                    let optimizedLoad = baseLoad;
+                    if (i >= 16 && i <= 21) optimizedLoad -= 2000;
+                    if (i >= 0 && i <= 6) optimizedLoad += 1500;
+
+                    temp.push({
+                        time: `${i}:00`,
+                        originalLoad: Math.round(baseLoad),
+                        optimizedLoad: Math.round(optimizedLoad),
+                        solarGen: (i >= 6 && i <= 17) ? Math.round(1000 * Math.sin((i - 6) / 11 * Math.PI)) : 0
+                    });
+                }
+                return temp;
+            }, []);
+
+            useEffect(() => {
+                const timer = setInterval(() => {
+                    if(isSimulationRunning) {
+                        setCurrentTime(new Date());
+                        setReserveMargin((15 + Math.random()).toFixed(2));
+                    }
+                }, 2000);
+                lucide.createIcons();
+                return () => clearInterval(timer);
+            }, [isSimulationRunning]);
+
+            const isPeakHour = currentTime.getHours() >= 16 && currentTime.getHours() <= 21;
+
+            return (
+                <div className="min-h-screen p-6 font-sans">
+                    {/* Header */}
+                    <header className="flex flex-col md:flex-row justify-between items-center mb-8 pb-4 border-b border-slate-800">
+                        <div className="flex items-center gap-3">
+                            <div className="bg-cyan-600 p-2 rounded-lg">
+                                <i data-lucide="zap" className="text-white w-8 h-8"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                                    PowerNexus
+                                </h1>
+                                <p className="text-slate-400 text-sm">智慧能源戰略中樞</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-6 mt-4 md:mt-0">
+                            <div className="text-right">
+                                <div className="text-2xl font-mono text-cyan-400">{currentTime.toLocaleTimeString()}</div>
+                                <div className="text-slate-500 text-sm">{currentTime.toLocaleDateString()}</div>
+                            </div>
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${isPeakHour ? 'bg-rose-900 text-rose-200 border border-rose-700 animate-pulse' : 'bg-emerald-900 text-emerald-200 border border-emerald-700'}`}>
+                                {isPeakHour ? '⚠ 尖峰費率時段' : '✓ 離峰/半尖峰時段'}
+                            </span>
+                        </div>
+                    </header>
+
+                    {/* Taipower Info */}
+                    <section className="mb-8">
+                        <Card title={<span className="flex items-center gap-2"><i data-lucide="activity" className="w-4 h-4"></i> 台電系統即時資訊同步</span>}>
+                            <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-16 h-16 rounded-full flex items-center justify-center border-4 border-slate-700 bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.6)]">
+                                        <span className="font-bold text-white">充裕</span>
+                                    </div>
+                                    <div>
+                                        <div className="text-slate-400 text-sm">目前備轉容量率</div>
+                                        <div className="text-4xl font-bold text-white font-mono">{reserveMargin}%</div>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+                                    <div className="flex justify-between w-40"><span className="text-slate-400">目前用電量:</span><span className="text-cyan-300">2980 萬瓩</span></div>
+                                    <div className="flex justify-between w-40"><span className="text-slate-400">最大供電:</span><span className="text-emerald-300">3602 萬瓩</span></div>
+                                </div>
+                                <a href="https://www.taipower.com.tw/" target="_blank" className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md transition-colors text-sm">
+                                    <i data-lucide="external-link" className="w-4 h-4"></i> 連結台電官網
+                                </a>
+                            </div>
+                        </Card>
+                    </section>
+
+                    {/* KPI Cards */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <KPICard label="即時需量" value="5,842" unit="kW" iconName="zap" trend={-2.5} color="text-cyan-400" />
+                        <KPICard label="功率因數" value="99.2" unit="%" iconName="trending-up" color="text-emerald-400" />
+                        <KPICard label="儲能系統 (SoC)" value="85" unit="%" iconName="battery-charging" color="text-yellow-400" />
+                        <KPICard label="預估電費" value="845" unit="萬" iconName="dollar-sign" trend={-12.4} color="text-rose-300" />
+                    </div>
+
+                    {/* Charts */}
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                        <div className="lg:col-span-2">
+                            <Card title="負載曲線優化與需量反應 (Load Profile Optimization)">
+                                <div className="h-80 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <AreaChart data={data}>
+                                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                            <XAxis dataKey="time" stroke="#64748b" fontSize={12} />
+                                            <YAxis stroke="#64748b" fontSize={12} />
+                                            <Tooltip contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155' }} />
+                                            <Legend />
+                                            <ReferenceLine y={contractCapacity} label={{ value: '契約容量', fill: '#f43f5e', position: 'insideTopRight' }} stroke="#f43f5e" strokeDasharray="3 3" />
+                                            <Area type="monotone" dataKey="originalLoad" name="原始負載" stroke="#94a3b8" fill="#94a3b8" fillOpacity={0.1} />
+                                            <Area type="monotone" dataKey="optimizedLoad" name="PowerNexus 優化" stroke="#22d3ee" fill="#06b6d4" fillOpacity={0.2} />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </Card>
+                        </div>
+
+                        <div className="lg:col-span-1">
+                            <Card title="AI 決策中心">
+                                <div className="space-y-4">
+                                    <div className="bg-slate-900/50 p-4 rounded-lg border border-slate-700">
+                                        <div className="flex justify-between text-sm mb-2">
+                                            <span className="text-slate-400">契約容量預測</span>
+                                            <span className="text-emerald-400 text-xs">安全 Safe</span>
+                                        </div>
+                                        <div className="w-full bg-slate-700 h-2 rounded-full overflow-hidden">
+                                            <div className="bg-cyan-500 h-full w-[83%]"></div>
+                                        </div>
+                                    </div>
+                                    <div className={`p-3 rounded-lg border flex gap-3 ${isPeakHour ? 'bg-rose-900/20 border-rose-700' : 'bg-slate-700/50 border-slate-600'}`}>
+                                        <i data-lucide="shield-check" className={isPeakHour ? "text-rose-400" : "text-slate-400"}></i>
+                                        <div>
+                                            <div className="text-sm font-bold">尖峰防禦盾</div>
+                                            <p className="text-xs text-slate-400 mt-1">{isPeakHour ? '已自動啟動儲能放電' : '系統待命，儲能充電中'}</p>
+                                        </div>
+                                    </div>
+                                    <button className="w-full bg-cyan-600 hover:bg-cyan-700 text-white py-2 rounded text-sm transition-colors">查看分析報告</button>
+                                </div>
+                            </Card>
+                        </div>
+                    </div>
+
+                    {/* Controls */}
+                    <Card title="系統模擬控制">
+                        <div className="flex flex-wrap gap-6 items-center">
+                            <div className="flex items-center gap-2">
+                                <span className="text-sm text-slate-400">契約容量:</span>
+                                <input type="number" value={contractCapacity} onChange={(e) => setContractCapacity(e.target.value)} className="bg-slate-900 border border-slate-700 rounded p-1 w-20 text-center" />
+                            </div>
+                            <button onClick={() => setIsSimulationRunning(!isSimulationRunning)} className={`px-4 py-1 rounded text-sm font-bold transition-all ${isSimulationRunning ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'}`}>
+                                {isSimulationRunning ? '模擬中 (Running)' : '已暫停 (Paused)'}
+                            </button>
+                        </div>
+                    </Card>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<PowerNexusDashboard />);
+    </script>
+</body>
+</html>
